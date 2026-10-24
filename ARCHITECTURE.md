@@ -1,6 +1,6 @@
 # Architecture
 
-LocalPaste is a single-module Android app with five source files. There is no AndroidX, no DI and no database: framework Views, one foreground service, and an in-memory list.
+LocalPaste is a single-module Android app with five Kotlin files plus the web page. There is no AndroidX, no DI and no database: framework Views, one foreground service, and an in-memory list.
 
 ```
 app/src/main/
@@ -10,7 +10,8 @@ app/src/main/
 │   ├── MainActivity.kt                the only screen
 │   ├── ServerService.kt               foreground service; owns the server's lifecycle
 │   ├── PasteServer.kt                 NanoHTTPD subclass; HTTP ⇄ PasteStore
-│   └── PasteStore.kt                  in-memory pastes shared by app and server
+│   ├── PasteStore.kt                  in-memory pastes shared by app and server
+│   └── IdleShutdown.kt                closes server, screen and process after 30 min idle
 └── res/layout/                        activity_main.xml, item_paste.xml
 ```
 
@@ -53,12 +54,19 @@ Start (`startForegroundService` from the activity, with the Wi-Fi IP as an extra
 3. Acquire a `WifiLock` (`FULL_LOW_LATENCY` on API 29+), arm the idle check, update the notification with the URL and a **Stop** action.
 4. Publish `ServerService.url` and notify the activity's listener.
 
-Stop (button, notification action, or idle timeout) all end in `stopSelf()` → `onDestroy`, which cancels the alarm, stops NanoHTTPD, releases the Wi-Fi lock, removes the notification and clears `url`.
+Stop (button, notification action, or `IdleShutdown`) all end in `onDestroy`, which stops NanoHTTPD, releases the Wi-Fi lock, removes the notification and clears `url`.
 
 Guarantees that matter for battery:
 - `START_NOT_STICKY` and no boot receiver: nothing restarts the server on its own.
 - No CPU wakelock. The `WAKE_LOCK` permission exists only because `WifiLock` requires it.
-- **Idle timeout** uses `AlarmManager` (`ELAPSED_REALTIME_WAKEUP` with an `OnAlarmListener`) rather than a `Handler`, because `Handler` delays use uptime, which pauses while the CPU sleeps. Requests just write a `@Volatile` timestamp; when the alarm fires it either stops the service or re-arms itself for the remaining time. This keeps per-request cost to a single field write.
+- Idle shutdown (below) ends the server and the whole process after 30 minutes of inactivity.
+
+### IdleShutdown
+A process-wide `object` that closes everything after `TIMEOUT_MS` (30 min) of inactivity: it calls `finishAndRemoveTask()` on the open screen, stops `ServerService`, and half a second later (so `onDestroy` can release the Wi-Fi lock and notification) calls `Process.killProcess`. Anything still held is reclaimed by the OS when the process dies.
+
+- **Activity** = any HTTP request (`PasteServer`'s `onRequest`), any touch or key event dispatched to `MainActivity`, or the app coming to the foreground. Each just writes a `@Volatile` timestamp.
+- **Armed for the process's lifetime:** `start()` is idempotent and called from both `MainActivity.onCreate` and `ServerService.onCreate`, whichever starts the process. So it also ends a process left cached in the background with the server off.
+- **Timer:** `AlarmManager.setExact` (`ELAPSED_REALTIME_WAKEUP` with an `OnAlarmListener`) rather than a `Handler`, because `Handler` delays use uptime, which pauses while the CPU sleeps. It is exact because inexact `set()` alarms may fire 10+ minutes late on Android 12+; the listener variant needs no `SCHEDULE_EXACT_ALARM` permission. When the alarm fires it either shuts down or re-arms itself for the remaining time, so nothing is rescheduled per request. Under Doze, the alarm may still be deferred to the next maintenance window.
 
 ### MainActivity
 A plain `android.app.Activity` with two areas: a scrolling area (toggle, URL, QR, paste list) and a composer (text box + Save) pinned to the bottom so it always sits above the keyboard.
@@ -83,7 +91,7 @@ One self-contained page. It polls `GET /api/pastes` every 3 s **only while the t
 
 | Thread | Runs |
 |---|---|
-| Main | Activity, service callbacks, idle alarm, `PasteStore` listener |
+| Main | Activity, service callbacks, `IdleShutdown` alarm, `PasteStore` listener |
 | NanoHTTPD workers | `PasteServer.serve` → `PasteStore` (synchronized) |
 | Connectivity thread | none — the network callback is registered with a main-thread `Handler` |
 

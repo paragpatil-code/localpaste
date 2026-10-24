@@ -1,6 +1,5 @@
 package com.localpaste
 
-import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -11,21 +10,17 @@ import android.content.pm.ServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
-import android.os.SystemClock
 import fi.iki.elonen.NanoHTTPD
 import java.io.IOException
 
 /**
  * Foreground service that owns the HTTP server. It runs only between an explicit start from
- * MainActivity and a stop (button, notification action, or idle timeout). It is never restarted
+ * MainActivity and a stop (button, notification action, or [IdleShutdown]). It is never restarted
  * by the system (START_NOT_STICKY) and has no boot receiver.
  */
 class ServerService : Service() {
 
     companion object {
-        /** Stop automatically after this long without any HTTP request. */
-        const val IDLE_TIMEOUT_MS = 30 * 60 * 1000L
-
         const val EXTRA_IP = "ip"
         private const val ACTION_STOP = "com.localpaste.STOP"
         private val PORTS = 8080..8090
@@ -46,10 +41,11 @@ class ServerService : Service() {
 
     private var server: PasteServer? = null
     private var wifiLock: WifiManager.WifiLock? = null
-    @Volatile private var lastRequestAt = 0L
 
-    private val alarms by lazy { getSystemService(AlarmManager::class.java) }
-    private val idleCheck = AlarmManager.OnAlarmListener { checkIdle() }
+    override fun onCreate() {
+        super.onCreate()
+        IdleShutdown.start(this) // the notification's Stop action can start a fresh process here
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -77,15 +73,13 @@ class ServerService : Service() {
         lastError = null
         url = "http://$ip:${started.listeningPort}"
         acquireWifiLock()
-        lastRequestAt = SystemClock.elapsedRealtime()
-        scheduleIdleCheck(lastRequestAt + IDLE_TIMEOUT_MS)
+        IdleShutdown.touch()
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(url!!))
         listener?.invoke()
         return START_NOT_STICKY
     }
 
     override fun onDestroy() {
-        alarms.cancel(idleCheck)
         server?.stop()
         server = null
         wifiLock?.let { if (it.isHeld) it.release() }
@@ -98,7 +92,7 @@ class ServerService : Service() {
     private fun startServer(): PasteServer? {
         val html = assets.open("index.html").bufferedReader().use { it.readText() }
         for (port in PORTS) {
-            val s = PasteServer(port, html) { lastRequestAt = SystemClock.elapsedRealtime() }
+            val s = PasteServer(port, html, IdleShutdown::touch)
             try {
                 s.start(NanoHTTPD.SOCKET_READ_TIMEOUT, true)
                 return s
@@ -119,17 +113,6 @@ class ServerService : Service() {
             setReferenceCounted(false)
             acquire()
         }
-    }
-
-    // AlarmManager (not Handler) so the timeout counts wall-clock time even while the CPU sleeps.
-    // Requests only bump a timestamp; the alarm re-arms itself for the remaining time.
-    private fun scheduleIdleCheck(at: Long) {
-        alarms.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, at, "LocalPaste:idle", idleCheck, null)
-    }
-
-    private fun checkIdle() {
-        val deadline = lastRequestAt + IDLE_TIMEOUT_MS
-        if (SystemClock.elapsedRealtime() >= deadline) stopSelf() else scheduleIdleCheck(deadline)
     }
 
     private fun goForeground(n: Notification) {

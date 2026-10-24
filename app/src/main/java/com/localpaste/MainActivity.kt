@@ -19,6 +19,8 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.text.format.DateFormat
+import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowInsets
 import android.widget.Button
@@ -70,6 +72,8 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        IdleShutdown.start(this)
+        IdleShutdown.activity = this
         setContentView(R.layout.activity_main)
         toggle = findViewById(R.id.toggle)
         status = findViewById(R.id.status)
@@ -111,6 +115,27 @@ class MainActivity : Activity() {
         ServerService.listener = null
         PasteStore.listener = null
         super.onStop()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        IdleShutdown.touch()
+    }
+
+    override fun onDestroy() {
+        if (IdleShutdown.activity === this) IdleShutdown.activity = null
+        super.onDestroy()
+    }
+
+    // Any touch or key press in the app counts as activity for the idle shutdown.
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        IdleShutdown.touch()
+        return super.dispatchTouchEvent(ev)
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        IdleShutdown.touch()
+        return super.dispatchKeyEvent(event)
     }
 
     private fun onToggle() {

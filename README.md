@@ -18,7 +18,9 @@ A tiny Android pastebin that runs on your local Wi-Fi. Turn it on in the app, op
 4. On another device on the same Wi-Fi, open that URL (or scan the QR code).
 5. Type or paste text and hit **Save** — in the app or on the web page. Both sides show the same list.
 
-Turn it off from the app or with the notification's **Stop** action. It also stops by itself after 30 minutes with no HTTP requests (an open, visible browser tab counts as activity; a background tab doesn't).
+Turn it off from the app or with the notification's **Stop** action.
+
+**Auto-close:** after 30 minutes of inactivity the whole app shuts down — the server stops, the screen closes and the app's process ends — whether the server is on or off, and whether the app is open or in the background. Activity means any HTTP request or any touch/key press in the app. An open, visible browser tab counts (it polls every 3 s); a background tab doesn't.
 
 > **Note:** pastes live in memory only (the 50 most recent). They survive turning the server off and on, but are lost when the app process is closed. Anyone on the same Wi-Fi can read and delete them — there is no password.
 
@@ -58,7 +60,7 @@ curl -X POST -H 'Content-Type: application/json' -d '{"text":"hello"}' http://19
 
 | What | Where |
 |---|---|
-| Idle auto-stop (30 min) | `ServerService.IDLE_TIMEOUT_MS` |
+| Idle auto-close (30 min) | `IdleShutdown.TIMEOUT_MS` |
 | Ports tried (8080–8090) | `ServerService.PORTS` |
 | Max pastes kept (50) | `PasteStore.MAX_PASTES` |
 | Max paste size (1 MB) | `PasteServer.MAX_BODY_BYTES` |
